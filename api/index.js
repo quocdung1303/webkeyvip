@@ -11,7 +11,7 @@ app.use(express.json());
 const orders = [];
 
 // GitHub Gist Config
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN || 'YOUR_GITHUB_TOKEN_HERE';
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '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';
 const GIST_ID = '2ad2730ba358ac7593fc1376303cb9c7';
 
 // VietinBank Info
