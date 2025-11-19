@@ -1,192 +1,316 @@
-import express from 'express';
-import cors from 'cors';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+const express = require('express');
+const cors = require('cors');
+const { spawn } = require('child_process');
+const path = require('path');
 
-const execAsync = promisify(exec);
 const app = express();
 
+// Middleware
 app.use(cors());
 app.use(express.json());
 
-// In-memory storage (thay PostgreSQL cho đơn giản)
+// In-memory storage
 const users = [];
 const orders = [];
-const keys = [];
 
-// Pricing
-const PACKAGES = {
-  'test': { price: 2000, hours: 3, name: '3 Giờ' },  // ← GÓI TEST MỚI
-  '1day': { price: 5000, hours: 24, name: '1 Ngày' },
-  '3days': { price: 10000, hours: 72, name: '3 Ngày' },
-  '7days': { price: 20000, hours: 168, name: '7 Ngày' },
-  '30days': { price: 50000, hours: 720, name: '30 Ngày' },
-  '90days': { price: 120000, hours: 2160, name: '3 Tháng' },
-  '180days': { price: 200000, hours: 4320, name: '6 Tháng' },
-  '365days': { price: 350000, hours: 8760, name: '1 Năm' }
-};
-
-// Helper: Generate Order ID
-function generateOrderId() {
-  return 'ORDER' + Date.now() + Math.random().toString(36).substr(2, 5).toUpperCase();
+// Helper function to generate random ID
+function generateId() {
+  return Date.now().toString() + Math.random().toString(36).substr(2, 9);
 }
 
-// Helper: Create key from GitHub Gist
-async function createKeyFromGist(hours, note) {
-  try {
-    const { stdout } = await execAsync(
-      `python3 keymanager.py create ${hours} "${note}"`
-    );
-    return stdout.trim();
-  } catch (error) {
-    console.error('Error creating key:', error);
-    return null;
-  }
-}
+// Helper function to create key using Python script
+async function createKey(hours, description) {
+  return new Promise((resolve, reject) => {
+    const pythonScript = path.join(__dirname, '..', 'keymanager.py');
+    const process = spawn('python3', [pythonScript, 'create', hours.toString(), description]);
+    
+    let output = '';
+    let error = '';
 
-// API: Register
-app.post('/api/auth/register', (req, res) => {
-  const { email, password } = req.body;
-  
-  if (users.find(u => u.email === email)) {
-    return res.status(400).json({ error: 'Email đã tồn tại' });
-  }
-  
-  const user = {
-    id: users.length + 1,
-    email,
-    password, // In production: use bcrypt
-    role: email === process.env.ADMIN_EMAIL ? 'admin' : 'user',
-    createdAt: new Date()
-  };
-  
-  users.push(user);
-  res.json({ success: true, user: { id: user.id, email: user.email, role: user.role } });
-});
+    process.stdout.on('data', (data) => {
+      output += data.toString();
+    });
 
-// API: Login
-app.post('/api/auth/login', (req, res) => {
-  const { email, password } = req.body;
-  const user = users.find(u => u.email === email && u.password === password);
-  
-  if (!user) {
-    return res.status(401).json({ error: 'Sai email hoặc mật khẩu' });
-  }
-  
-  res.json({ success: true, user: { id: user.id, email: user.email, role: user.role } });
-});
+    process.stderr.on('data', (data) => {
+      error += data.toString();
+    });
 
-// API: Create Order
-app.post('/api/orders/create', (req, res) => {
-  const { userId, packageId } = req.body;
-  const pkg = PACKAGES[packageId];
-  
-  if (!pkg) {
-    return res.status(400).json({ error: 'Gói không hợp lệ' });
-  }
-  
-  const orderId = generateOrderId();
-  const order = {
-    id: orders.length + 1,
-    orderId,
-    userId,
-    packageId,
-    amount: pkg.price,
-    status: 'pending',
-    createdAt: new Date()
-  };
-  
-  orders.push(order);
-  
-  res.json({
-    success: true,
-    order: {
-      orderId,
-      amount: pkg.price,
-      packageName: pkg.name,
-      qrData: {
-        accountNo: process.env.STK_VIETINBANK,
-        accountName: 'NGUYEN QUOC DUNG',
-        amount: pkg.price,
-        description: orderId,
-        bank: 'VietinBank'
+    process.on('close', (code) => {
+      if (code === 0) {
+        // Parse output to extract key
+        const lines = output.trim().split('\n');
+        const keyLine = lines.find(line => line.includes('Key:'));
+        if (keyLine) {
+          const key = keyLine.split('Key:')[1].trim();
+          resolve({ success: true, key });
+        } else {
+          resolve({ success: false, error: 'Could not extract key from output' });
+        }
+      } else {
+        resolve({ success: false, error: error || 'Failed to create key' });
       }
-    }
+    });
+
+    process.on('error', (err) => {
+      resolve({ success: false, error: err.message });
+    });
   });
+}
+
+// Auth Routes
+app.post('/api/auth/register', (req, res) => {
+  try {
+    const { email, password, name } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    const existingUser = users.find(u => u.email === email);
+    if (existingUser) {
+      return res.status(400).json({ error: 'Email already registered' });
+    }
+
+    const user = {
+      id: generateId(),
+      email,
+      password, // In production, hash this!
+      name: name || email.split('@')[0],
+      role: email === 'admin@arestool.com' ? 'admin' : 'user',
+      createdAt: new Date().toISOString()
+    };
+
+    users.push(user);
+
+    const { password: _, ...userWithoutPassword } = user;
+    res.json({ user: userWithoutPassword });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// API: Webhook from SePay
-app.post('/api/webhook/sepay', async (req, res) => {
-  const transaction = req.body;
-  
-  // Verify transaction
-  if (transaction.transferType !== 'in') {
-    return res.status(200).send('OK');
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    const user = users.find(u => u.email === email && u.password === password);
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const { password: _, ...userWithoutPassword } = user;
+    res.json({ user: userWithoutPassword });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
-  
-  // Extract order ID from transaction content
-  const orderId = transaction.content.match(/ORDER[A-Z0-9]+/)?.[0];
-  if (!orderId) {
-    return res.status(200).send('OK');
-  }
-  
-  // Find order
-  const order = orders.find(o => o.orderId === orderId && o.status === 'pending');
-  if (!order) {
-    return res.status(200).send('OK');
-  }
-  
-  // Check amount
-  const pkg = PACKAGES[order.packageId];
-  if (transaction.transferAmount < pkg.price) {
-    return res.status(200).send('OK');
-  }
-  
-  // Create key from Gist
-  const keyValue = await createKeyFromGist(pkg.hours, pkg.name);
-  if (!keyValue) {
-    return res.status(500).json({ error: 'Không thể tạo key' });
-  }
-  
-  // Save key
-  const key = {
-    id: keys.length + 1,
-    userId: order.userId,
-    orderId: order.orderId,
-    key: keyValue,
-    packageName: pkg.name,
-    expiresAt: new Date(Date.now() + pkg.hours * 60 * 60 * 1000),
-    createdAt: new Date()
-  };
-  
-  keys.push(key);
-  
-  // Update order status
-  order.status = 'completed';
-  order.completedAt = new Date();
-  
-  res.status(200).send('OK');
 });
 
-// API: Get user keys
-app.get('/api/keys/:userId', (req, res) => {
-  const userKeys = keys.filter(k => k.userId == req.params.userId);
-  res.json({ keys: userKeys });
+// Order Routes
+app.post('/api/orders', (req, res) => {
+  try {
+    const { packageId, amount, email } = req.body;
+
+    const order = {
+      id: generateId(),
+      packageId,
+      amount,
+      email,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      key: null,
+      paidAt: null
+    };
+
+    orders.push(order);
+    res.json({ order });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// API: Admin - Get all orders
+app.get('/api/orders', (req, res) => {
+  try {
+    const { email } = req.query;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const userOrders = orders.filter(o => o.email === email);
+    res.json({ orders: userOrders });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/orders/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const order = orders.find(o => o.id === id);
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    res.json({ order });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin Routes
 app.get('/api/admin/orders', (req, res) => {
-  res.json({ orders });
+  try {
+    res.json({ orders });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// API: Admin - Get all users
 app.get('/api/admin/users', (req, res) => {
-  res.json({ users: users.map(u => ({ id: u.id, email: u.email, role: u.role, createdAt: u.createdAt })) });
+  try {
+    const usersWithoutPasswords = users.map(({ password, ...user }) => user);
+    res.json({ users: usersWithoutPasswords });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// API: Admin - Get all keys
-app.get('/api/admin/keys', (req, res) => {
-  res.json({ keys });
+app.get('/api/admin/stats', (req, res) => {
+  try {
+    const stats = {
+      totalUsers: users.length,
+      totalOrders: orders.length,
+      pendingOrders: orders.filter(o => o.status === 'pending').length,
+      completedOrders: orders.filter(o => o.status === 'completed').length,
+      totalRevenue: orders
+        .filter(o => o.status === 'completed')
+        .reduce((sum, o) => sum + o.amount, 0)
+    };
+    res.json({ stats });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-export default app;
+// SePay Webhook Handler
+app.post('/api/webhook/sepay', async (req, res) => {
+  try {
+    console.log('🔔 SePay webhook received:', JSON.stringify(req.body, null, 2));
+    
+    const {
+      gateway,
+      transactionDate,
+      accountNumber,
+      transferType,
+      transferAmount,
+      content,
+      referenceCode,
+      description
+    } = req.body;
+
+    // BƯỚC 1: Kiểm tra giao dịch TIỀN VÀO
+    if (transferType !== 'in') {
+      console.log('⚠️ Not incoming transaction, skip');
+      return res.json({ success: true, message: 'Not incoming transaction' });
+    }
+
+    // BƯỚC 2: Kiểm tra STK đúng không
+    if (accountNumber !== '102881164268') {
+      console.log('❌ Wrong account number:', accountNumber);
+      return res.json({ success: false, message: 'Wrong account number' });
+    }
+
+    // BƯỚC 3: Tách ORDER ID từ nội dung chuyển khoản
+    // Format: "ARESTOOL ORDER123456" hoặc "ORDER123456" hoặc "DH123456"
+    const orderIdRegex = /(?:ARESTOOL\s+)?(?:ORDER|DH)?(\w{10,})/i;
+    const match = content.match(orderIdRegex);
+    
+    if (!match || !match[1]) {
+      console.log('❌ Cannot extract order ID from content:', content);
+      return res.json({ success: false, message: 'Invalid payment content format' });
+    }
+
+    const orderId = match[1];
+    console.log('📦 Extracted Order ID:', orderId);
+
+    // BƯỚC 4: Tìm order trong database
+    const order = orders.find(o => 
+      o.id === orderId && 
+      o.amount === transferAmount && 
+      o.status === 'pending'
+    );
+    
+    if (!order) {
+      console.log('❌ Order not found or already paid:', {
+        orderId,
+        amount: transferAmount,
+        availableOrders: orders.filter(o => o.id === orderId)
+      });
+      return res.json({ success: false, message: 'Order not found or already paid' });
+    }
+
+    console.log('✅ Order found:', order);
+
+    // BƯỚC 5: Tạo key tự động
+    const packageDurations = {
+      'test': 3,
+      '1day': 24,
+      '7day': 168,
+      '30day': 720
+    };
+
+    const duration = packageDurations[order.packageId] || 24;
+    console.log('🔑 Creating key with duration:', duration, 'hours');
+
+    const keyResult = await createKey(duration, `Order ${orderId} - ${order.email}`);
+    
+    if (!keyResult.success) {
+      console.log('❌ Failed to create key:', keyResult.error);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to create key: ' + keyResult.error 
+      });
+    }
+
+    // BƯỚC 6: Cập nhật order status
+    order.status = 'completed';
+    order.key = keyResult.key;
+    order.paidAt = new Date().toISOString();
+    order.transactionInfo = {
+      gateway,
+      transactionDate,
+      referenceCode,
+      amount: transferAmount
+    };
+
+    console.log('✅✅✅ Payment confirmed! Key created:', keyResult.key);
+
+    // BƯỚC 7: Trả về success cho SePay
+    res.json({ 
+      success: true, 
+      message: 'Payment confirmed and key created',
+      orderId: orderId,
+      key: keyResult.key
+    });
+
+  } catch (error) {
+    console.error('❌ Webhook error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// Health check
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+module.exports = app;
