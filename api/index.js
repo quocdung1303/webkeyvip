@@ -16,6 +16,7 @@ const keys = [];
 
 // Pricing
 const PACKAGES = {
+  'test': { price: 2000, hours: 3, name: '3 Giờ' },  // ← GÓI TEST MỚI
   '1day': { price: 5000, hours: 24, name: '1 Ngày' },
   '3days': { price: 10000, hours: 72, name: '3 Ngày' },
   '7days': { price: 20000, hours: 168, name: '7 Ngày' },
