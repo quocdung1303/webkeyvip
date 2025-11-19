@@ -4,6 +4,7 @@ import axios from 'axios'
 import QRCode from 'qrcode'
 
 const PACKAGES = [
+  { id: 'test', name: '3 Giờ', price: 2000, popular: false },  // ← GÓI TEST MỚI
   { id: '1day', name: '1 Ngày', price: 5000, popular: false },
   { id: '3days', name: '3 Ngày', price: 10000, popular: false },
   { id: '7days', name: '7 Ngày', price: 20000, popular: true },
