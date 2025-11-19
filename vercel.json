@@ -1,33 +1,8 @@
 {
-  "version": 2,
-  "builds": [
+  "rewrites": [
     {
-      "src": "api/index.js",
-      "use": "@vercel/node"
-    },
-    {
-      "src": "package.json",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "dist"
-      }
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/api/index.js"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/$1"
-    }
-  ],
-  "env": {
-    "GITHUB_TOKEN": "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",
-    "GIST_ID": "2ad2730ba358ac7593fc1376303cb9c7",
-    "SEPAY_TOKEN": "PAN3A5IRTTHHQZCLZCBCQ0BMKOHX9ARVNOSWIGDDGN5SVHJKWP8XIZ2VFVJE4OOU",
-    "STK_VIETINBANK": "102881164268",
-    "ADMIN_EMAIL": "admin@arestool.com"
-  }
+  ]
 }
